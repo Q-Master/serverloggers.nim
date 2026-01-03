@@ -1,0 +1,8 @@
+# Package
+description = "Nim logger for use with syslog/rsyslog"
+version     = "0.0.1"
+license     = "MIT"
+author      = "Vladimir Berezenko <qmaster2000@gmail.com>"
+
+# Dependencies
+requires "nim >= 2.2"
