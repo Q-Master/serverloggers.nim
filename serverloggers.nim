@@ -1,5 +1,5 @@
 from logging import nil
-import std/[nativesockets, strutils, uri, os, tables]
+import std/[nativesockets, strutils, uri, os, tables, times]
 
 const useThreads {.used.} = compileOption("threads")
 const useAsync = defined(useAsync)
@@ -62,7 +62,7 @@ type
 
   ServerLogger = ref object of logging.Logger
     formatter: LoggerFormatter
-    tags: LoggerTagger
+    tagger: LoggerTagger
     name: string
     when useThreads:
       threadId: int = -1
@@ -99,6 +99,12 @@ type
 
 
 const DEFAULT_URL = "unix://localhost:514"
+const DEFAULT_FORMAT = "%(asctime).%(msecs) %(process) %(levelname) %(filename):%(lineno)] %(name) %(tags) %(message)"
+const YEAR_MONTH_DAY = "yyyy-MM-dd"
+const HOUR_MINUTE_SECOND = "hh:mm:ss"
+let DATE_FORMAT = YEAR_MONTH_DAY & " " & HOUR_MINUTE_SECOND
+let DATE_FORMAT_LENGHT = DATE_FORMAT.len
+let MSECS_LEN = 3
 
 
 let convTable: array[logging.Level, RsyslogLevels] = [
@@ -108,6 +114,27 @@ let convTable: array[logging.Level, RsyslogLevels] = [
 let namesTable: array[logging.Level, char] = [
   'D', 'D', 'I', 'N', 'W', 'E', 'F', 'D'
 ]
+
+proc initTagger(self: var LoggerTagger) =
+  self.tags.add(initTable[string, string]())
+
+proc pushTags(self: var LoggerTagger) =
+  let tcopy = self.tags[-1]
+  self.tags.add(tcopy)
+
+proc popTags(self: var LoggerTagger) =
+  if self.tags.len > 1:
+    self.tags.setLen(self.tags.len-1)
+
+proc len(self: LoggerTagger): int =
+  result = 2 # {}
+  var keys = 0
+  for k,v in self.tags[-1].pairs:
+    result.inc(k.len+1) # incl :
+    result.inc(v.len)
+    keys.inc
+  if keys > 1:
+    result.inc(keys-1) # adding separating commas
 
 template encodePriority(facility: RsyslogFacilities, priority: RsyslogLevels): int =
   return (facility.int << 3) | priority.int
@@ -149,17 +176,132 @@ proc prepareFormat(self: var LoggerFormatter, fmt: string) =
       else:
         self.fmt.add(fmt[i].uint8)
 
+
+func numLen(n: int): int {.inline.} =
+  if n > 999999:
+    result = 7
+  elif n > 99999:
+    result = 6
+  elif n > 9999:
+    result = 5
+  elif n > 999:
+    result = 4
+  elif n > 99:
+    result = 3
+  elif n > 9:
+    result = 2
+  else:
+    result = 1
+
+
 proc initLogger(self: ServerLogger, levelThreshold: logging.Level, fmtStr: string) =
   self.levelThreshold = levelThreshold
   self.formatter.prepareFormat(fmtStr)
   when useThreads:
     self.threadId = getThreadId()
   self.processId = getCurrentProcessId()
+  self.tagger.initTagger()
 
+
+proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, message: openArray[char]): string =
+  var strlen = 0
+  for code in self.formatter.fmt:
+    case code
+    of LF_NAME.uint8:
+      strlen.inc(self.name.len)
+    of LF_LEVEL_NO.uint8:
+      strlen.inc
+    of LF_LEVEL_NAME.uint8:
+      strlen.inc
+    of LF_FILE_NAME.uint8:
+      strlen.inc(filename.len)
+    of LF_LINE_NO.uint8:
+      strlen.inc(lineno.len)
+    of LF_ASCTIME.uint8:
+      strlen.inc(DATE_FORMAT_LENGHT)
+    of LF_MSECS.uint8:
+      strlen.inc(MSECS_LEN)
+    of LF_THREAD_ID.uint8:
+      when useThreads:
+        if self.threadId >= 0:
+          strlen.inc(self.threadId.numLen)
+        else:
+          # thread ID is -1
+          strlen.inc(2)
+    of LF_PROCESS_ID.uint8:
+      if self.processId >= 0:
+        strlen.inc(self.processId.numLen)
+      else:
+        # process ID is -1
+        strlen.inc(2)
+    of LF_TAGS.uint8:
+      strlen.inc(self.tagger.len)
+    of LF_MESSAGE.uint8:
+      strlen.inc(message.len)
+    else:
+      strlen.inc
+  result.setLen(strlen)
+  var destUnchecked = cast[ptr UncheckedArray[char]](result[0].addr)
+  var at = 0
+  template add(ds: ptr UncheckedArray[char], c: char) =
+    ds[at] = c
+    at.inc
+  template add(ds: ptr UncheckedArray[char], s: openArray[char]) =
+    for c in s:
+      ds.add(c)
+  let ts = now()
+  for code in self.formatter.fmt:
+    case code
+    of LF_NAME.uint8:
+      for n in self.name:
+        destUnchecked.add(n)
+    of LF_LEVEL_NO.uint8:
+      destUnchecked.add(('0'.uint8+level.uint8).char)
+    of LF_LEVEL_NAME.uint8:
+      destUnchecked.add(namesTable[level])
+    of LF_FILE_NAME.uint8:
+      for n in filename:
+        destUnchecked.add(n)
+    of LF_LINE_NO.uint8:
+      destUnchecked.add(lineno)
+    of LF_ASCTIME.uint8:
+      destUnchecked.add(ts.format(DATE_FORMAT))
+    of LF_MSECS.uint8:
+      let ms = $convert(Nanoseconds, Milliseconds, ts.nanosecond)
+      for n in 0..<MSECS_LEN:
+        destUnchecked.add(ms[n])
+    of LF_THREAD_ID.uint8:
+      when useThreads:
+        if self.threadId >= 0:
+          destUnchecked.add($self.threadId)
+        else:
+          destUnchecked.add('-')
+          destUnchecked.add('1')
+    of LF_PROCESS_ID.uint8:
+      if self.processId >= 0:
+        destUnchecked.add($self.processId)
+      else:
+        destUnchecked.add('-')
+        destUnchecked.add('1')
+    of LF_TAGS.uint8:
+      destUnchecked.add('{')
+      if self.tagger.tags.len > 0:
+        var notFirst = false
+        for k,v in self.tagger.tags[-1].pairs:
+          if notFirst:
+            destUnchecked.add(',')
+          destUnchecked.add(k)
+          destUnchecked.add(':')
+          destUnchecked.add(v)
+          notFirst = true
+      destUnchecked.add('}')
+    of LF_MESSAGE.uint8:
+      destUnchecked.add(message)
+    else:
+      destUnchecked.add(code.char)
 
 
 #[
-    __DEFAULT_FMT = '%(asctime).%(msecs) %(process) %(levelname) %(filename):%(lineno)] %(name) %(tags) %(message)'
     __DEFAULT_DATE_FMT = '%Y-%m-%d %H:%M:%S'
 ]#
 
@@ -190,7 +332,7 @@ log("hi world")
 
 proc newConsoleLogger*(
   levelThreshold = logging.lvlDebug,
-  fmtStr = logging.defaultFmtStr
+  fmtStr = DEFAULT_FORMAT
 ): ConsoleLogger =
   result.new
   result.initLogger(levelThreshold, fmtStr)
@@ -210,7 +352,7 @@ proc newRsyslogLogger*(
   facility: RsyslogFacilities = FAC_USER,
   useTcpSock = false,
   levelThreshold = logging.lvlDebug,
-  fmtStr = logging.defaultFmtStr
+  fmtStr = DEFAULT_FORMAT
 ): RsyslogLogger =
   result.new
   result.facility = facility
@@ -320,3 +462,10 @@ else:
       self.isConnected = false
     logging.removeHandler(self)
 
+
+proc tag*(self: ServerLogger, key: string, value: SomeNumber | SomeFloat) =
+  self.tagger.tags[-1]["\"" & key & "\""] = $value # json key is always a string
+
+
+proc tag*(self: ServerLogger, key: string, value: string) =
+  self.tagger.tags[-1]["\"" & key & "\""] = "\"" & value & "\"" # json key is always a string, string value is also a json string
