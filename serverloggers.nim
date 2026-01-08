@@ -1,5 +1,6 @@
 from logging import nil
 import std/[nativesockets, strutils, uri, os, tables, times]
+export logging.Level
 
 const useThreads {.used.} = compileOption("threads")
 const useAsync = defined(useAsync)
@@ -58,7 +59,7 @@ type
     fmt: seq[uint8]
 
   LoggerTagger = object
-    tags: seq[Table[string, string]]
+    tags: Table[string, string]
 
   ServerLogger = ref object of logging.Logger
     formatter: LoggerFormatter
@@ -68,10 +69,14 @@ type
       threadId: int = -1
     processId: int = -1
 
+  ConsoleLoggerImpl = ref object of RootObj
+    useStderr: bool
+    flushThreshold: logging.Level
 
   ConsoleLogger* = ref object of ServerLogger
+    impl: ConsoleLoggerImpl
 
-  RsyslogLogger* = ref object of ServerLogger
+  RsysLoggerImpl = ref object of RootObj
     when useAsync:
       socket: AsyncSocket
     else:
@@ -86,6 +91,9 @@ type
     port: Port
     facility: RsyslogFacilities
     isConnected: bool
+
+  RsyslogLogger* = ref object of ServerLogger
+    impl: RsysLoggerImpl
 
   RsyslogLevels = enum
     LOG_EMERG       #  system is unusable
@@ -102,9 +110,9 @@ const DEFAULT_URL = "unix://localhost:514"
 const DEFAULT_FORMAT = "%(asctime).%(msecs) %(process) %(levelname) %(filename):%(lineno)] %(name) %(tags) %(message)"
 const YEAR_MONTH_DAY = "yyyy-MM-dd"
 const HOUR_MINUTE_SECOND = "hh:mm:ss"
-let DATE_FORMAT = YEAR_MONTH_DAY & " " & HOUR_MINUTE_SECOND
-let DATE_FORMAT_LENGHT = DATE_FORMAT.len
-let MSECS_LEN = 3
+const DATE_FORMAT = YEAR_MONTH_DAY & " " & HOUR_MINUTE_SECOND
+const DATE_FORMAT_LENGHT = DATE_FORMAT.len
+const MSECS_LEN = 3
 
 
 let convTable: array[logging.Level, RsyslogLevels] = [
@@ -115,29 +123,20 @@ let namesTable: array[logging.Level, char] = [
   'D', 'D', 'I', 'N', 'W', 'E', 'F', 'D'
 ]
 
-proc initTagger(self: var LoggerTagger) =
-  self.tags.add(initTable[string, string]())
-
-proc pushTags(self: var LoggerTagger) =
-  let tcopy = self.tags[-1]
-  self.tags.add(tcopy)
-
-proc popTags(self: var LoggerTagger) =
-  if self.tags.len > 1:
-    self.tags.setLen(self.tags.len-1)
 
 proc len(self: LoggerTagger): int =
   result = 2 # {}
   var keys = 0
-  for k,v in self.tags[-1].pairs:
+  for k,v in self.tags.pairs:
     result.inc(k.len+1) # incl :
     result.inc(v.len)
     keys.inc
   if keys > 1:
     result.inc(keys-1) # adding separating commas
 
-template encodePriority(facility: RsyslogFacilities, priority: RsyslogLevels): int =
-  return (facility.int << 3) | priority.int
+
+proc clone(self: LoggerTagger): LoggerTagger =
+  result.tags = self.tags
 
 
 proc prepareFormat(self: var LoggerFormatter, fmt: string) =
@@ -173,8 +172,10 @@ proc prepareFormat(self: var LoggerFormatter, fmt: string) =
       if fmt[i] == '%' and i+1 < fmt.len and fmt[i+1] == '(':
         token = true
         tokenStr = ""
+        i.inc
       else:
         self.fmt.add(fmt[i].uint8)
+    i.inc
 
 
 func numLen(n: int): int {.inline.} =
@@ -200,7 +201,14 @@ proc initLogger(self: ServerLogger, levelThreshold: logging.Level, fmtStr: strin
   when useThreads:
     self.threadId = getThreadId()
   self.processId = getCurrentProcessId()
-  self.tagger.initTagger()
+
+
+proc clone(src, dest: ServerLogger) =
+  dest.levelThreshold = src.levelThreshold
+  dest.formatter = src.formatter
+  when useThreads:
+    dest.threadId = src.threadId
+  dest.processId = src.processId
 
 
 proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, message: openArray[char]): string =
@@ -287,7 +295,7 @@ proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, me
       destUnchecked.add('{')
       if self.tagger.tags.len > 0:
         var notFirst = false
-        for k,v in self.tagger.tags[-1].pairs:
+        for k,v in self.tagger.tags.pairs:
           if notFirst:
             destUnchecked.add(',')
           destUnchecked.add(k)
@@ -301,40 +309,16 @@ proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, me
       destUnchecked.add(code.char)
 
 
-#[
-    __DEFAULT_DATE_FMT = '%Y-%m-%d %H:%M:%S'
-]#
-
-#[
-
-import logging, strutils
-
-var logger = newConsoleLogger(fmtStr = "[$time][$levelid]")
-addHandler(logger)
-
-template log*(lvl: Level, data: string): untyped =
-  let pos {.compiletime.} = instantiationInfo()
-  const
-    addition =
-      when defined(release):
-        "[$1] " % [pos.filename]
-      else:
-        "[$1:$2] " % [pos.filename, $pos.line]
-  logger.log(lvl, addition & data)
-
-template log*(data: string): untyped = log(lvlInfo, data)
-
-log("hi world")
-
-]#
-
-
-
 proc newConsoleLogger*(
+  useStderr = false,
+  flushThreshold = logging.lvlError,
   levelThreshold = logging.lvlDebug,
   fmtStr = DEFAULT_FORMAT
 ): ConsoleLogger =
   result.new
+  result.impl.new
+  result.impl.useStderr = useStderr
+  result.impl.flushThreshold = flushThreshold
   result.initLogger(levelThreshold, fmtStr)
 
 
@@ -347,6 +331,30 @@ proc close*(self: ConsoleLogger) =
   logging.removeHandler(self)
 
 
+proc clone*(self: ConsoleLogger): ConsoleLogger =
+  result.new
+  self.clone(result)
+  result.impl = self.impl
+  result.tagger = self.tagger.clone
+
+
+method log*(logger: ConsoleLogger, level: logging.Level, args: varargs[string, `$`]) {.gcsafe.} =
+  if level >= logger.levelThreshold:
+    let msg = logger.buildMessage(level, args[0], args[1], args[2])
+    try:
+      var handle = stdout
+      if logger.impl.useStderr:
+        handle = stderr
+      writeLine(handle, msg)
+      if level >= logger.impl.flushThreshold: flushFile(handle)
+    except IOError:
+      discard
+
+
+template encodePriority(facility: RsyslogFacilities, priority: RsyslogLevels): int =
+  return (facility.int << 3) | priority.int
+
+
 proc newRsyslogLogger*(
   url = DEFAULT_URL,
   facility: RsyslogFacilities = FAC_USER,
@@ -355,19 +363,20 @@ proc newRsyslogLogger*(
   fmtStr = DEFAULT_FORMAT
 ): RsyslogLogger =
   result.new
-  result.facility = facility
-  result.useTcpSock = useTcpSock
   result.initLogger(levelThreshold, fmtStr)
-  result.isConnected = false
+  result.impl.new
+  result.impl.facility = facility
+  result.impl.useTcpSock = useTcpSock
+  result.impl.isConnected = false
   let parsed = url.parseUri()
   if parsed.scheme == "unix" or parsed.hostname == "" or parsed.port == "":
-    result.useUnixSock = true
-    result.host = if parsed.scheme == "unix": parsed.hostname else: parsed.path
+    result.impl.useUnixSock = true
+    result.impl.host = if parsed.scheme == "unix": parsed.hostname else: parsed.path
   else:
-    result.host = parsed.hostname
-    result.port = parsed.port.parseBiggestInt().Port
+    result.impl.host = parsed.hostname
+    result.impl.port = parsed.port.parseBiggestInt().Port
   when useThreads:
-    result.sLock.initLock()
+    result.impl.sLock.initLock()
 
 
 when useAsync:
@@ -420,35 +429,35 @@ else:
 
   proc connectUnixSocket(self: RsyslogLogger) =
     try:
-      whenNeedLock(self.sLock):
-        self.socket.connectUnix(self.host)
-      self.isConnected = true
+      whenNeedLock(self.impl.sLock):
+        self.impl.socket.connectUnix(self.impl.host)
+      self.impl.isConnected = true
     except OSError:
-      whenNeedLock(self.sLock):
-        self.socket.close()
-      self.isConnected = false
+      whenNeedLock(self.impl.sLock):
+        self.impl.socket.close()
+      self.impl.isConnected = false
       raise
 
   proc connectNonUnix(self: RsyslogLogger) =
     try:
-      whenNeedLock(self.sLock):
-        self.socket.connect(self.host, self.port)
-      self.isConnected = true
+      whenNeedLock(self.impl.sLock):
+        self.impl.socket.connect(self.impl.host, self.impl.port)
+      self.impl.isConnected = true
     except OSError:
-      whenNeedLock(self.sLock):
-        self.socket.close()
-      self.isConnected = false
+      whenNeedLock(self.impl.sLock):
+        self.impl.socket.close()
+      self.impl.isConnected = false
       raise
 
   proc open*(self: RsyslogLogger) =
-    whenNeedLock(self.sLock):
-      if self.useUnixSock:
-        self.socket = newSocket(AF_UNIX, (if self.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE, buffered=false)
-      elif self.useTcpSock:
-        self.socket = newSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+    whenNeedLock(self.impl.sLock):
+      if self.impl.useUnixSock:
+        self.impl.socket = newSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE, buffered=false)
+      elif self.impl.useTcpSock:
+        self.impl.socket = newSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
       else:
-        self.socket = newSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, buffered=false)
-    if self.useTcpSock:
+        self.impl.socket = newSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, buffered=false)
+    if self.impl.useTcpSock:
       self.connectUnixSocket()
     else:
       self.connectNonUnix()
@@ -456,16 +465,27 @@ else:
       logging.addHandler(self)
 
   proc close*(self: RsyslogLogger) =
-    if self.isConnected:
-      whenNeedLock(self.sLock):
-        self.socket.close()
-      self.isConnected = false
+    if self.impl.isConnected:
+      whenNeedLock(self.impl.sLock):
+        self.impl.socket.close()
+      self.impl.isConnected = false
     logging.removeHandler(self)
 
 
+proc clone*(self: RsyslogLogger): RsyslogLogger =
+  result.new
+  self.clone(result)
+  result.impl = self.impl
+  result.tagger = self.tagger.clone
+
 proc tag*(self: ServerLogger, key: string, value: SomeNumber | SomeFloat) =
-  self.tagger.tags[-1]["\"" & key & "\""] = $value # json key is always a string
+  self.tagger.tags["\"" & key & "\""] = $value # json key is always a string
 
 
 proc tag*(self: ServerLogger, key: string, value: string) =
-  self.tagger.tags[-1]["\"" & key & "\""] = "\"" & value & "\"" # json key is always a string, string value is also a json string
+  self.tagger.tags["\"" & key & "\""] = "\"" & value & "\"" # json key is always a string, string value is also a json string
+
+
+template log*(lvl: logging.Level, message: string): untyped =
+  let pos {.compiletime.} = instantiationInfo()
+  logging.log(lvl, pos.filename, $pos.line, message)
