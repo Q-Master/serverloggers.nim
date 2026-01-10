@@ -368,7 +368,6 @@ template encodePriority(facility: RsyslogFacilities, priority: RsyslogLevels): i
 proc newRsyslogLogger*(
   url = DEFAULT_URL,
   facility: RsyslogFacilities = FAC_USER,
-  useTcpSock = false,
   levelThreshold = logging.lvlDebug,
   fmtStr = DEFAULT_FORMAT
 ): RsyslogLogger =
@@ -376,15 +375,27 @@ proc newRsyslogLogger*(
   result.initLogger(levelThreshold, fmtStr)
   result.impl.new
   result.impl.facility = facility
-  result.impl.useTcpSock = useTcpSock
   result.impl.isConnected = false
   let parsed = url.parseUri()
-  if parsed.scheme == "unix" or parsed.hostname == "" or parsed.port == "":
+  case parsed.scheme
+  of "unix":
     result.impl.useUnixSock = true
     result.impl.host = parsed.path
-  else:
+    result.impl.useTcpSock = false
+  of "unix_tcp":
+    result.impl.useUnixSock = true
+    result.impl.host = parsed.path
+    result.impl.useTcpSock = true
+  of "udp":
     result.impl.host = parsed.hostname
     result.impl.port = parsed.port.parseBiggestInt().Port
+    result.impl.useTcpSock = false
+  of "tcp":
+    result.impl.host = parsed.hostname
+    result.impl.port = parsed.port.parseBiggestInt().Port
+    result.impl.useTcpSock = true
+  else:
+    raise newException(ValueError, "Unsupported URL scheme: " & parsed.scheme)
   when useThreads:
     result.impl.sLock.initLock()
 
