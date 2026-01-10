@@ -2,8 +2,9 @@ from logging import nil
 import std/[nativesockets, strutils, uri, os, tables, times]
 export logging.Level
 
-const useThreads {.used.} = compileOption("threads")
 const useAsync = defined(useAsync)
+const useThreads = compileOption("threads") and not useAsync
+
 
 
 when useAsync:
@@ -106,7 +107,11 @@ type
     LOG_DEBUG       #  debug-level messages
 
 
-const DEFAULT_URL = "unix://localhost:514"
+when defined(macosx):
+  const DEFAULT_URL = "unix:///var/run/syslog"
+else:
+  const DEFAULT_URL = "unix:///dev/log"
+
 const DEFAULT_FORMAT = "%(asctime).%(msecs) %(process) %(levelname) %(filename):%(lineno)] %(name) %(tags) %(message)"
 const YEAR_MONTH_DAY = "yyyy-MM-dd"
 const HOUR_MINUTE_SECOND = "hh:mm:ss"
@@ -276,7 +281,13 @@ proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, me
       destUnchecked.add(ts.format(DATE_FORMAT))
     of LF_MSECS.uint8:
       let ms = $convert(Nanoseconds, Milliseconds, ts.nanosecond)
-      for n in 0..<MSECS_LEN:
+      var msecs = MSECS_LEN
+      if ms.len < MSECS_LEN:
+        let leading0 = MSECS_LEN-ms.len
+        for n in 0..<leading0:
+          destUnchecked.add('0')
+        msecs = ms.len
+      for n in 0..<msecs:
         destUnchecked.add(ms[n])
     of LF_THREAD_ID.uint8:
       when useThreads:
@@ -351,8 +362,7 @@ method log*(logger: ConsoleLogger, level: logging.Level, args: varargs[string, `
       discard
 
 
-template encodePriority(facility: RsyslogFacilities, priority: RsyslogLevels): int =
-  return (facility.int << 3) | priority.int
+template encodePriority(facility: RsyslogFacilities, priority: RsyslogLevels): int = facility.int.shl(3) or priority.int
 
 
 proc newRsyslogLogger*(
@@ -371,7 +381,7 @@ proc newRsyslogLogger*(
   let parsed = url.parseUri()
   if parsed.scheme == "unix" or parsed.hostname == "" or parsed.port == "":
     result.impl.useUnixSock = true
-    result.impl.host = if parsed.scheme == "unix": parsed.hostname else: parsed.path
+    result.impl.host = parsed.path
   else:
     result.impl.host = parsed.hostname
     result.impl.port = parsed.port.parseBiggestInt().Port
@@ -381,44 +391,63 @@ proc newRsyslogLogger*(
 
 when useAsync:
   proc connectUnixSocket(self: RsyslogLogger) {.async.} =
-    if not self.isConnected:
+    if not self.impl.isConnected:
       try:
-        await self.socket.connectUnix(self.host)
-        self.isConnected = true
+        await self.impl.socket.connectUnix(self.impl.host)
+        self.impl.isConnected = true
       except OSError:
-        self.socket.close()
-        self.isConnected = false
+        self.impl.socket.close()
+        self.impl.isConnected = false
         raise
 
   proc connectNonUnix(self: RsyslogLogger) {.async.} =
-    if not self.isConnected:
+    if not self.impl.isConnected:
       try:
-        await self.socket.connect(self.host, self.port)
-        self.isConnected = true
+        await self.impl.socket.connect(self.impl.host, self.impl.port)
+        self.impl.isConnected = true
       except OSError:
-        self.socket.close()
-        self.isConnected = false
+        self.impl.socket.close()
+        self.impl.isConnected = false
         raise
 
   proc open*(self: RsyslogLogger) {.async.} =
-    if self.useUnixSock:
-      self.socket = newAsyncSocket(AF_UNIX, (if self.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE, buffered=false)
-    elif useTcpSock:
-      self.socket = newAsyncSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+    if self.impl.useUnixSock:
+      self.impl.socket = newAsyncSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE)
+    elif self.impl.useTcpSock:
+      self.impl.socket = newAsyncSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
     else:
-      self.socket = newAsyncSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, buffered=false)
-    if self.useUnixSock:
+      self.impl.socket = newAsyncSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, buffered=false)
+    if self.impl.useUnixSock:
       await self.connectUnixSocket()
     else:
-      self.connectNonUnix()
-    if self notIn getHandlers():
-      addHandler(self)
+      await self.connectNonUnix()
+    if self notIn logging.getHandlers():
+      logging.addHandler(self)
 
   proc close*(self: RsyslogLogger) {.async.} =
-    if self.isConnected:
-      await self.socket.close()
-      self.isConnected = false
-    removeHandler(self)
+    if self.impl.isConnected:
+      self.impl.socket.close()
+      self.impl.isConnected = false
+    logging.removeHandler(self)
+
+  method log*(logger: RsyslogLogger, level: logging.Level, args: varargs[string, `$`]) =
+    proc realsend(msg: string) {.async.} =
+      if logger.impl.useUnixSock or logger.impl.useTcpSock:
+        await logger.impl.socket.send(msg)
+      else:
+        await logger.impl.socket.sendTo(logger.impl.host, logger.impl.port, msg)
+    if level >= logger.levelThreshold:
+      let prio = encodePriority(logger.impl.facility, convTable[level])
+      let msg = $prio & logger.buildMessage(level, args[0], args[1], args[2]) & "\x00"
+      if not logger.impl.isConnected:
+        if logger.impl.useUnixSock:
+          waitFor logger.connectUnixSocket()
+        else:
+          waitFor logger.connectNonUnix()
+      try:
+        waitFor(msg.realsend)
+      except IOError:
+        discard
 else:
   template whenNeedLock(l: Lock, body: untyped) =
     when useThreads:
@@ -452,12 +481,12 @@ else:
   proc open*(self: RsyslogLogger) =
     whenNeedLock(self.impl.sLock):
       if self.impl.useUnixSock:
-        self.impl.socket = newSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE, buffered=false)
+        self.impl.socket = newSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE)
       elif self.impl.useTcpSock:
         self.impl.socket = newSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
       else:
         self.impl.socket = newSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, buffered=false)
-    if self.impl.useTcpSock:
+    if self.impl.useUnixSock:
       self.connectUnixSocket()
     else:
       self.connectNonUnix()
@@ -470,6 +499,25 @@ else:
         self.impl.socket.close()
       self.impl.isConnected = false
     logging.removeHandler(self)
+
+  method log*(logger: RsyslogLogger, level: logging.Level, args: varargs[string, `$`]) =
+    if level >= logger.levelThreshold:
+      let prio = encodePriority(logger.impl.facility, convTable[level])
+      let msg = $prio & logger.buildMessage(level, args[0], args[1], args[2]) & "\x00"
+      if not logger.impl.isConnected:
+        if logger.impl.useUnixSock:
+          logger.connectUnixSocket()
+        else:
+          logger.connectNonUnix()
+      try:
+        if logger.impl.useUnixSock or logger.impl.useTcpSock:
+          whenNeedLock(logger.impl.sLock):
+            logger.impl.socket.send(msg)
+        else:
+          whenNeedLock(logger.impl.sLock):
+            logger.impl.socket.sendTo(logger.impl.host, logger.impl.port, msg)
+      except IOError:
+        discard
 
 
 proc clone*(self: RsyslogLogger): RsyslogLogger =
@@ -487,5 +535,5 @@ proc tag*(self: ServerLogger, key: string, value: string) =
 
 
 template log*(lvl: logging.Level, message: string): untyped =
-  let pos {.compiletime.} = instantiationInfo()
-  logging.log(lvl, pos.filename, $pos.line, message)
+  const (fname, lnum, _) = instantiationInfo()
+  logging.log(lvl, fname, lnum, message)
