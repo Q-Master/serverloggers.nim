@@ -56,7 +56,7 @@ type
     LF_TAGS         ## Tags attached to the logger in simple JSON notation
     LF_MESSAGE      ## The message of a log record
 
-  LoggerFormatter = object
+  LoggerFormatter = ref object
     fmt: seq[uint8]
 
   LoggerTagger = object
@@ -144,8 +144,9 @@ proc clone(self: LoggerTagger): LoggerTagger =
   result.tags = self.tags
 
 
-proc prepareFormat(self: var LoggerFormatter, fmt: string) =
-  self.fmt = @[]
+proc newFormatter(fmt: string): LoggerFormatter =
+  result.new
+  result.fmt = @[]
   var token: bool = false
   var tokenStr: string
   var i = 0
@@ -156,30 +157,30 @@ proc prepareFormat(self: var LoggerFormatter, fmt: string) =
       elif fmt[i] == ')':
         token = false
         case tokenStr.toLowerAscii
-        of "name": self.fmt.add(LF_NAME.uint8)
-        of "levelno": self.fmt.add(LF_LEVEL_NO.uint8)
-        of "levelname": self.fmt.add(LF_LEVEL_NAME.uint8)
-        of "filename": self.fmt.add(LF_FILE_NAME.uint8)
-        of "lineno": self.fmt.add(LF_LINE_NO.uint8)
-        of "asctime": self.fmt.add(LF_ASCTIME.uint8)
-        of "msecs": self.fmt.add(LF_MSECS.uint8)
-        of "thread": self.fmt.add(LF_THREAD_ID.uint8)
-        of "process": self.fmt.add(LF_PROCESS_ID.uint8)
-        of "tags": self.fmt.add(LF_TAGS.uint8)
-        of "message": self.fmt.add(LF_MESSAGE.uint8)
+        of "name": result.fmt.add(LF_NAME.uint8)
+        of "levelno": result.fmt.add(LF_LEVEL_NO.uint8)
+        of "levelname": result.fmt.add(LF_LEVEL_NAME.uint8)
+        of "filename": result.fmt.add(LF_FILE_NAME.uint8)
+        of "lineno": result.fmt.add(LF_LINE_NO.uint8)
+        of "asctime": result.fmt.add(LF_ASCTIME.uint8)
+        of "msecs": result.fmt.add(LF_MSECS.uint8)
+        of "thread": result.fmt.add(LF_THREAD_ID.uint8)
+        of "process": result.fmt.add(LF_PROCESS_ID.uint8)
+        of "tags": result.fmt.add(LF_TAGS.uint8)
+        of "message": result.fmt.add(LF_MESSAGE.uint8)
       else:
         token = false
-        self.fmt.add('%'.uint8)
-        self.fmt.add('('.uint8)
+        result.fmt.add('%'.uint8)
+        result.fmt.add('('.uint8)
         for td in tokenStr:
-          self.fmt.add(td.uint8)
+          result.fmt.add(td.uint8)
     else:
       if fmt[i] == '%' and i+1 < fmt.len and fmt[i+1] == '(':
         token = true
         tokenStr = ""
         i.inc
       else:
-        self.fmt.add(fmt[i].uint8)
+        result.fmt.add(fmt[i].uint8)
     i.inc
 
 
@@ -202,7 +203,7 @@ func numLen(n: int): int {.inline.} =
 
 proc initLogger(self: ServerLogger, levelThreshold: logging.Level, fmtStr: string) =
   self.levelThreshold = levelThreshold
-  self.formatter.prepareFormat(fmtStr)
+  self.formatter = newFormatter(fmtStr)
   when useThreads:
     self.threadId = getThreadId()
   self.processId = getCurrentProcessId()
@@ -351,7 +352,7 @@ proc clone*(self: ConsoleLogger): ConsoleLogger =
 
 method log*(logger: ConsoleLogger, level: logging.Level, args: varargs[string, `$`]) {.gcsafe.} =
   if level >= logger.levelThreshold:
-    let msg = logger.buildMessage(level, args[0], args[1], args[2])
+    let msg: string = if args.len == 3: logger.buildMessage(level, args[0], args[1], args[2]) else: logger.buildMessage(level, "", "", args.join(" "))
     try:
       var handle = stdout
       if logger.impl.useStderr:
@@ -451,7 +452,7 @@ when useAsync:
         await logger.impl.socket.sendTo(logger.impl.host, logger.impl.port, msg)
     if level >= logger.levelThreshold:
       let prio = encodePriority(logger.impl.facility, convTable[level])
-      let msg = $prio & logger.buildMessage(level, args[0], args[1], args[2]) & "\x00"
+      let msg: string = $prio & (if args.len == 3: logger.buildMessage(level, args[0], args[1], args[2]) else: logger.buildMessage(level, "", "", args.join(" "))) & "\x00"
       if not logger.impl.isConnected:
         if logger.impl.useUnixSock:
           waitFor logger.connectUnixSocket()
@@ -516,7 +517,7 @@ else:
   method log*(logger: RsyslogLogger, level: logging.Level, args: varargs[string, `$`]) =
     if level >= logger.levelThreshold:
       let prio = encodePriority(logger.impl.facility, convTable[level])
-      let msg = $prio & logger.buildMessage(level, args[0], args[1], args[2]) & "\x00"
+      let msg: string = $prio & (if args.len == 3: logger.buildMessage(level, args[0], args[1], args[2]) else: logger.buildMessage(level, "", "", args.join(" "))) & "\x00"
       if not logger.impl.isConnected:
         if logger.impl.useUnixSock:
           logger.connectUnixSocket()
