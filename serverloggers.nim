@@ -362,9 +362,6 @@ method log*(logger: ConsoleLogger, level: logging.Level, args: varargs[string, `
       discard
 
 
-template encodePriority(facility: RsyslogFacilities, priority: RsyslogLevels): int = facility.int.shl(3) or priority.int
-
-
 proc newRsyslogLogger*(
   url = DEFAULT_URL,
   facility: RsyslogFacilities = FAC_USER,
@@ -379,25 +376,30 @@ proc newRsyslogLogger*(
   let parsed = url.parseUri()
   case parsed.scheme
   of "unix":
-    result.impl.useUnixSock = true
     result.impl.host = parsed.path
+    result.impl.useUnixSock = true
     result.impl.useTcpSock = false
   of "unix_tcp":
-    result.impl.useUnixSock = true
     result.impl.host = parsed.path
+    result.impl.useUnixSock = true
     result.impl.useTcpSock = true
   of "udp":
     result.impl.host = parsed.hostname
     result.impl.port = parsed.port.parseBiggestInt().Port
+    result.impl.useUnixSock = false
     result.impl.useTcpSock = false
   of "tcp":
     result.impl.host = parsed.hostname
     result.impl.port = parsed.port.parseBiggestInt().Port
+    result.impl.useUnixSock = false
     result.impl.useTcpSock = true
   else:
     raise newException(ValueError, "Unsupported URL scheme: " & parsed.scheme)
   when useThreads:
     result.impl.sLock.initLock()
+
+
+template encodePriority(facility: RsyslogFacilities, priority: RsyslogLevels): int = facility.int.shl(3) or priority.int
 
 
 when useAsync:
