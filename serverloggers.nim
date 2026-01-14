@@ -551,3 +551,15 @@ proc tag*(self: ServerLogger, key: string, value: string) =
 template log*(lvl: logging.Level, message: string): untyped =
   const (fname, lnum, _) = instantiationInfo()
   logging.log(lvl, fname, lnum, message)
+
+
+template log*(logger: ServerLogger, lvl: logging.Level, message: string): untyped =
+  const (fname, lnum, _) = instantiationInfo()
+  logger.log(lvl, fname, lnum, message)
+
+
+template debug*(message:string) = log(logging.lvlDebug, message)
+template info*(message:string) = log(logging.lvlInfo, message)
+template warn*(message:string) = log(logging.lvlWarn, message)
+template error*(message:string) = log(logging.lvlError, message)
+template fatal*(message:string) = log(logging.lvlFatal, message)
