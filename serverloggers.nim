@@ -540,6 +540,7 @@ proc clone*(self: RsyslogLogger): RsyslogLogger =
   result.impl = self.impl
   result.tagger = self.tagger.clone
 
+
 proc tag*(self: ServerLogger, key: string, value: SomeNumber | SomeFloat) =
   self.tagger.tags["\"" & key & "\""] = $value # json key is always a string
 
@@ -556,6 +557,13 @@ template log*(lvl: logging.Level, message: string): untyped =
 template log*(logger: ServerLogger, lvl: logging.Level, message: string): untyped =
   const (fname, lnum, _) = instantiationInfo()
   logger.log(lvl, fname, lnum, message)
+
+
+template debug*(logger: ServerLogger, message: string) = log(logger, logging.lvlDebug, message)
+template info*(logger: ServerLogger, message: string) = log(logger, logging.lvlInfo, message)
+template warn*(logger: ServerLogger, message: string) = log(logger, logging.lvlWarn, message)
+template error*(logger: ServerLogger, message: string) = log(logger, logging.lvlError, message)
+template fatal*(logger: ServerLogger, message: string) = log(logger, logging.lvlFatal, message)
 
 
 template debug*(message:string) = log(logging.lvlDebug, message)
