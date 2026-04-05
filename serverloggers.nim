@@ -62,7 +62,7 @@ type
   LoggerTagger = object
     tags: Table[string, string]
 
-  ServerLogger = ref object of logging.Logger
+  ServerLogger* = ref object of logging.Logger
     formatter: LoggerFormatter
     tagger: LoggerTagger
     name: string
@@ -209,6 +209,12 @@ proc initLogger(self: ServerLogger, levelThreshold: logging.Level, fmtStr: strin
   self.processId = getCurrentProcessId()
 
 
+method open*(self: ServerLogger) {.base.} =
+  discard
+method close*(self: ServerLogger) {.base.} =
+  discard
+
+
 proc clone(src, dest: ServerLogger) =
   dest.levelThreshold = src.levelThreshold
   dest.formatter = src.formatter
@@ -334,12 +340,12 @@ proc newConsoleLogger*(
   result.initLogger(levelThreshold, fmtStr)
 
 
-proc open*(self: ConsoleLogger) =
+method open*(self: ConsoleLogger) =
   if self notIn logging.getHandlers():
     logging.addHandler(self)
 
 
-proc close*(self: ConsoleLogger) =
+method close*(self: ConsoleLogger) =
   logging.removeHandler(self)
 
 
@@ -424,21 +430,23 @@ when useAsync:
         self.impl.isConnected = false
         raise
 
-  proc open*(self: RsyslogLogger) {.async.} =
-    if self.impl.useUnixSock:
-      self.impl.socket = newAsyncSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE)
-    elif self.impl.useTcpSock:
-      self.impl.socket = newAsyncSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-    else:
-      self.impl.socket = newAsyncSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, buffered=false)
-    if self.impl.useUnixSock:
-      await self.connectUnixSocket()
-    else:
-      await self.connectNonUnix()
-    if self notIn logging.getHandlers():
-      logging.addHandler(self)
+  method open*(self: RsyslogLogger) =
+    proc realOpen() {.async.} =
+      if self.impl.useUnixSock:
+        self.impl.socket = newAsyncSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE)
+      elif self.impl.useTcpSock:
+        self.impl.socket = newAsyncSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+      else:
+        self.impl.socket = newAsyncSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, buffered=false)
+      if self.impl.useUnixSock:
+        await self.connectUnixSocket()
+      else:
+        await self.connectNonUnix()
+      if self notIn logging.getHandlers():
+        logging.addHandler(self)
+    waitFor(realOpen())
 
-  proc close*(self: RsyslogLogger) {.async.} =
+  method close*(self: RsyslogLogger) =
     if self.impl.isConnected:
       self.impl.socket.close()
       self.impl.isConnected = false
@@ -492,7 +500,7 @@ else:
       self.impl.isConnected = false
       raise
 
-  proc open*(self: RsyslogLogger) =
+  method open*(self: RsyslogLogger) =
     whenNeedLock(self.impl.sLock):
       if self.impl.useUnixSock:
         self.impl.socket = newSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE)
@@ -507,7 +515,7 @@ else:
     if self notIn logging.getHandlers():
       logging.addHandler(self)
 
-  proc close*(self: RsyslogLogger) =
+  method close*(self: RsyslogLogger) =
     if self.impl.isConnected:
       whenNeedLock(self.impl.sLock):
         self.impl.socket.close()
