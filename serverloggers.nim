@@ -55,6 +55,7 @@ type
     LF_PROCESS_ID   ## Process ID (if available)
     LF_TAGS         ## Tags attached to the logger in simple JSON notation
     LF_MESSAGE      ## The message of a log record
+    LF_HOSTNAME     ## The current host name
 
   LoggerFormatter = ref object
     fmt: seq[uint8]
@@ -66,6 +67,7 @@ type
     formatter: LoggerFormatter
     tagger: LoggerTagger
     name: string
+    hostName: string
     when useThreads:
       threadId: int = -1
     processId: int = -1
@@ -168,6 +170,7 @@ proc newFormatter(fmt: string): LoggerFormatter =
         of "process": result.fmt.add(LF_PROCESS_ID.uint8)
         of "tags": result.fmt.add(LF_TAGS.uint8)
         of "message": result.fmt.add(LF_MESSAGE.uint8)
+        of "node": result.fmt.add(LF_HOSTNAME.uint8)
       else:
         token = false
         result.fmt.add('%'.uint8)
@@ -204,13 +207,15 @@ func numLen(n: int): int {.inline.} =
 proc initLogger(self: ServerLogger, levelThreshold: logging.Level, fmtStr: string) =
   self.levelThreshold = levelThreshold
   self.formatter = newFormatter(fmtStr)
+  self.hostName = getHostname()
   when useThreads:
     self.threadId = getThreadId()
   self.processId = getCurrentProcessId()
 
 
-method open*(self: ServerLogger) {.base.} =
+method open*(self: ServerLogger, name: string) {.base.} =
   discard
+
 method close*(self: ServerLogger) {.base.} =
   discard
 
@@ -258,6 +263,8 @@ proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, me
       strlen.inc(self.tagger.len)
     of LF_MESSAGE.uint8:
       strlen.inc(message.len)
+    of LF_HOSTNAME.uint8:
+      strlen.inc(self.hostName.len)
     else:
       strlen.inc
   result.setLen(strlen)
@@ -323,6 +330,8 @@ proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, me
       destUnchecked.add('}')
     of LF_MESSAGE.uint8:
       destUnchecked.add(message)
+    of LF_HOSTNAME.uint8:
+      destUnchecked.add(self.hostName)
     else:
       destUnchecked.add(code.char)
 
@@ -340,7 +349,8 @@ proc newConsoleLogger*(
   result.initLogger(levelThreshold, fmtStr)
 
 
-method open*(self: ConsoleLogger) =
+method open*(self: ConsoleLogger, name: string) =
+  self.name = name
   if self notIn logging.getHandlers():
     logging.addHandler(self)
 
@@ -430,7 +440,8 @@ when useAsync:
         self.impl.isConnected = false
         raise
 
-  method open*(self: RsyslogLogger) =
+  method open*(self: RsyslogLogger, name: string) =
+    self.name = name
     proc realOpen() {.async.} =
       if self.impl.useUnixSock:
         self.impl.socket = newAsyncSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE)
@@ -500,7 +511,8 @@ else:
       self.impl.isConnected = false
       raise
 
-  method open*(self: RsyslogLogger) =
+  method open*(self: RsyslogLogger, name: string) =
+    self.name = name
     whenNeedLock(self.impl.sLock):
       if self.impl.useUnixSock:
         self.impl.socket = newSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE)

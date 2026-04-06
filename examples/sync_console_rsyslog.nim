@@ -2,7 +2,7 @@ import ../serverloggers
 
 proc useConsoleLog() =
   var logger = newConsoleLogger()
-  logger.open()
+  logger.open("ConsoleLogTest")
   logger.tag("key", "value")
   logger.tag("key1", 8)
   log(lvlDebug, "Test log")
@@ -10,7 +10,7 @@ proc useConsoleLog() =
 
 proc useRsysLog() =
   var logger = newRsyslogLogger()
-  logger.open()
+  logger.open("SyncRsysLogTest")
   logger.tag("key", "value")
   logger.tag("key1", 8)
   log(lvlDebug, "Test log")
