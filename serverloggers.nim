@@ -53,6 +53,7 @@ type
     LF_MSECS        ## Millisecond portion of the creation time rounded to 3 leading digits
     LF_THREAD_ID    ## Thread ID (if available)
     LF_PROCESS_ID   ## Process ID (if available)
+    LF_PROCESS_NAME ## Process Name (if available)
     LF_TAGS         ## Tags attached to the logger in simple JSON notation
     LF_MESSAGE      ## The message of a log record
     LF_HOSTNAME     ## The current host name
@@ -71,6 +72,7 @@ type
     when useThreads:
       threadId: int = -1
     processId: int = -1
+    processName: string = ""
 
   ConsoleLoggerImpl = ref object of RootObj
     useStderr: bool
@@ -168,6 +170,7 @@ proc newFormatter(fmt: string): LoggerFormatter =
         of "msecs": result.fmt.add(LF_MSECS.uint8)
         of "thread": result.fmt.add(LF_THREAD_ID.uint8)
         of "process": result.fmt.add(LF_PROCESS_ID.uint8)
+        of "pname": result.fmt.add(LF_PROCESS_NAME.uint8)
         of "tags": result.fmt.add(LF_TAGS.uint8)
         of "message": result.fmt.add(LF_MESSAGE.uint8)
         of "node": result.fmt.add(LF_HOSTNAME.uint8)
@@ -204,6 +207,24 @@ func numLen(n: int): int {.inline.} =
     result = 1
 
 
+proc getProcessNameByPid(pid: int): string =
+  when defined(linux):
+    try:
+      result = expandSymlink("/proc/" & $pid & "/exe")
+    except OSError:
+      discard
+
+  elif defined(macosx):
+    proc procPidpath(pid: int32, buffer: pointer, bufferSize: uint32): int32 {.importc: "proc_pidpath", header: "<libproc.h>".}
+
+    var buf: array[4096, char]
+    let len = procPidpath(pid.int32, addr buf[0], uint32(buf.len))
+    if len > 0:
+      result = $cast[cstring](addr buf[0])
+  else:
+    raise newException(ValueError, "Unsupported platform")
+
+
 proc initLogger(self: ServerLogger, levelThreshold: logging.Level, fmtStr: string) =
   self.levelThreshold = levelThreshold
   self.formatter = newFormatter(fmtStr)
@@ -211,10 +232,12 @@ proc initLogger(self: ServerLogger, levelThreshold: logging.Level, fmtStr: strin
   when useThreads:
     self.threadId = getThreadId()
   self.processId = getCurrentProcessId()
+  self.processName = getProcessNameByPid(self.processId)
 
 
 method open*(self: ServerLogger, name: string) {.base.} =
   discard
+
 
 method close*(self: ServerLogger) {.base.} =
   discard
@@ -226,6 +249,9 @@ proc clone(src, dest: ServerLogger) =
   when useThreads:
     dest.threadId = src.threadId
   dest.processId = src.processId
+  dest.processName = src.processName
+  dest.name = src.name
+  dest.hostName = src.hostName
 
 
 proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, message: openArray[char]): string =
@@ -259,6 +285,8 @@ proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, me
       else:
         # process ID is -1
         strlen.inc(2)
+    of LF_PROCESS_NAME.uint8:
+      strlen.inc(self.processName.len)
     of LF_TAGS.uint8:
       strlen.inc(self.tagger.len)
     of LF_MESSAGE.uint8:
@@ -316,6 +344,8 @@ proc buildMessage(self: ServerLogger, level: logging.Level, filename, lineno, me
       else:
         destUnchecked.add('-')
         destUnchecked.add('1')
+    of LF_PROCESS_NAME.uint8:
+      destUnchecked.add(self.processName)
     of LF_TAGS.uint8:
       destUnchecked.add('{')
       if self.tagger.tags.len > 0:

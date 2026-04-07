@@ -16,7 +16,7 @@ import std/[asyncdispatch]
 
 proc useRsyslog() {.async.} =
   let logger = newRsyslogLogger()
-  await logger.open()
+  await logger.open("TestRsyslog")
   logger.tag("key", "value")
   logger.tag("key1", 8)
   log(lvlDebug, "Test log")
@@ -31,7 +31,7 @@ also as in sync ones (including threaded):
 ```nim
 proc useRsysLog() =
   var logger = newRsyslogLogger()
-  logger.open()
+  logger.open("TestRsyslog")
   logger.tag("key", "value")
   logger.tag("key1", 8)
   log(lvlDebug, "Test log")
@@ -54,6 +54,7 @@ Format items must be placed to format string as "%(`name`)" where name might be:
 | name | desctiption |
 |:------:|:-------------:|
 | name | the application name |
+| node | the host name of current node |
 | levelno | this message logging level |
 | levelname | first uppercase letter of this message logging level |
 | filename | name of the file which instantiates current log message |
@@ -62,6 +63,7 @@ Format items must be placed to format string as "%(`name`)" where name might be:
 | msecs | three leading numbers of current message msesc time |
 | thread | thread id (might be -1 if unavailable) |
 | process| process id (might be -1 if unavailable) |
+| pname | process name (might be empty if unavailable) |
 | tags | simple json-like key-value dictionary supporting only strings, floats, ints in values |
 | message | the message itself|
 
