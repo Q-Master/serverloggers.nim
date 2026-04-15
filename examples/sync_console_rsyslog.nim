@@ -1,4 +1,4 @@
-import ../serverloggers
+import serverloggers
 
 proc useConsoleLog() =
   var logger = newConsoleLogger()

@@ -1,9 +1,9 @@
-import ../serverloggers
+import serverloggers
 import std/[asyncdispatch]
 
 
 proc useRsyslog() {.async.} =
-  let logger: ServerLogger = newRsyslogLogger()
+  let logger: RsyslogLogger = newRsyslogLogger()
   logger.open("AsyncRsysLogTest")
   logger.tag("key", "value")
   logger.tag("key1", 8)
