@@ -4,7 +4,7 @@ import ./loggers/[consolelogger, rsyslogger, serverlogger]
 
 export consolelogger
 export rsyslogger
-export serverlogger except open, close, clone
+export serverlogger except initLogger, install, deinstall, buildMessage
 
 
 template log*(lvl: logging.Level, message: string): untyped =

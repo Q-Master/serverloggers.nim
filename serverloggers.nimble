@@ -1,6 +1,6 @@
 # Package
 description = "Nim loggers with additinal features and syslog/rsyslog support"
-version     = "0.2.1"
+version     = "0.2.2"
 license     = "MIT"
 author      = "Vladimir Berezenko <qmaster2000@gmail.com>"
 srcDir      = "src"
