@@ -1,9 +1,10 @@
 from logging import nil
 export logging.Level
-import ./loggers/[consolelogger, rsyslogger, serverlogger]
+import ./loggers/[consolelogger, rsyslogger, filelogger, serverlogger]
 
 export consolelogger
 export rsyslogger
+export filelogger
 export serverlogger except initLogger, install, deinstall, buildMessage
 
 
