@@ -156,7 +156,10 @@ when useAsync:
 
   method open*(self: FileLogger, name: string) =
     if self.impl.rotated != FL_NONE:
-      self.impl.lastRotated = getCreationTime(self.impl.fileName)
+      try:
+        self.impl.lastRotated = getCreationTime(self.impl.fileName)
+      except:
+        self.impl.lastRotated = getTime()
 
     proc realOpen() {.async.} =
       await self.checkRotate()
@@ -207,7 +210,10 @@ else:
 
   method open*(self: FileLogger, name: string) =
     if self.impl.rotated != FL_NONE:
-      self.impl.lastRotated = getCreationTime(self.impl.fileName)
+      try:
+        self.impl.lastRotated = getCreationTime(self.impl.fileName)
+      except:
+        self.impl.lastRotated = getTime()
     self.checkRotate()
     if self.impl.fd.isNil:
       self.impl.fd = open(self.impl.fileName, fmAppend)
