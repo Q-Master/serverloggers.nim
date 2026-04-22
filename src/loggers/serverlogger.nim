@@ -52,10 +52,14 @@ proc deinstall*[T: ServerLogger](self: T) =
   logging.removeHandler(self)
 
 
-method open*(self: ServerLogger, name: string) {.base.} = discard
-
-
-method close*(self: ServerLogger) {.base.} = discard
+when useAsync:
+  import std/[asyncdispatch]
+  method open*(self: ServerLogger, name: string) {.async, base.} = discard
+  method close*(self: ServerLogger) {.async, base.} = discard
+  method asyncLog*(self: logging.Logger, level: logging.Level, args: varargs[string, `$`]): Future[void] {.base.} = discard
+else:
+  method open*(self: ServerLogger, name: string) {.base.} = discard
+  method close*(self: ServerLogger) {.base.} = discard
 
 
 proc clone*(src, dest: ServerLogger) =
@@ -89,11 +93,6 @@ proc tag*(self: ServerLogger, key: string, value: SomeNumber | SomeFloat) =
 
 proc tag*(self: ServerLogger, key: string, value: string) =
   self.tagger.tags["\"" & key & "\""] = "\"" & value & "\"" # json key is always a string, string value is also a json string
-
-
-template log*(logger: ServerLogger, lvl: logging.Level, message: string): untyped =
-  const (fname, lnum, _) = instantiationInfo()
-  logger.log(lvl, fname, lnum, message)
 
 
 template debug*(logger: ServerLogger, message: string) = log(logger, logging.lvlDebug, message)

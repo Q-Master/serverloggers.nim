@@ -143,45 +143,50 @@ when useAsync:
         self.impl.isConnected = false
         raise
 
-  method open*(self: RsyslogLogger, name: string) =
-    proc realOpen() {.async.} =
-      if self.impl.useUnixSock:
-        self.impl.socket = newAsyncSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE)
-      elif self.impl.useTcpSock:
-        self.impl.socket = newAsyncSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-      else:
-        self.impl.socket = newAsyncSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, buffered=false)
-      if self.impl.useUnixSock:
-        await self.connectUnixSocket()
-      else:
-        await self.connectNonUnix()
-    waitFor(realOpen())
+  method open*(self: RsyslogLogger, name: string) {.async.} =
+    if self.impl.useUnixSock:
+      self.impl.socket = newAsyncSocket(AF_UNIX, (if self.impl.useTcpSock: SOCK_STREAM else: SOCK_DGRAM), IPPROTO_NONE)
+    elif self.impl.useTcpSock:
+      self.impl.socket = newAsyncSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+    else:
+      self.impl.socket = newAsyncSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, buffered=false)
+    if self.impl.useUnixSock:
+      await self.connectUnixSocket()
+    else:
+      await self.connectNonUnix()
     self.install(name)
 
-  method close*(self: RsyslogLogger) =
+  method close*(self: RsyslogLogger) {.async.} =
     if self.impl.isConnected:
       self.impl.socket.close()
       self.impl.isConnected = false
     self.deinstall()
 
-  method log*(logger: RsyslogLogger, level: logging.Level, args: varargs[string, `$`]) =
-    proc realsend(msg: string) {.async.} =
-      if logger.impl.useUnixSock or logger.impl.useTcpSock:
-        await logger.impl.socket.send(msg)
-      else:
-        await logger.impl.socket.sendTo(logger.impl.host, logger.impl.port, msg)
+  method asyncLog*(logger: RsyslogLogger, level: logging.Level, args: varargs[string, `$`]): Future[void] =
     if level >= logger.levelThreshold:
+      proc realSend(msg: string) {.async.} =
+        if not logger.impl.isConnected:
+          if logger.impl.useUnixSock:
+            await logger.connectUnixSocket()
+          else:
+            await logger.connectNonUnix()
+        try:
+          if logger.impl.useUnixSock or logger.impl.useTcpSock:
+            await logger.impl.socket.send(msg)
+          else:
+            await logger.impl.socket.sendTo(logger.impl.host, logger.impl.port, msg)
+        except IOError:
+          discard
       let prio = encodePriority(logger.impl.facility, convTable[level])
       let msg: string = $prio & logger.buildMessage(level, args) & "\x00"
-      if not logger.impl.isConnected:
-        if logger.impl.useUnixSock:
-          waitFor logger.connectUnixSocket()
-        else:
-          waitFor logger.connectNonUnix()
-      try:
-        waitFor(msg.realsend)
-      except IOError:
-        discard
+      result = realSend(msg)
+    else:
+      result = Future[void]()
+      result.complete()
+
+  method log*(logger: RsyslogLogger, level: logging.Level, args: varargs[string, `$`]) =
+    waitFor(asyncLog(logger, level, args))
+
 else:
   proc connectUnixSocket(self: RsyslogLogger) =
     try:

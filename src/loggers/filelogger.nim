@@ -8,7 +8,7 @@ when useAsync:
   import std/[asyncdispatch, asyncfile]
 
 when useThreads:
-  import std/[locks, atomics]
+  import std/[locks]
 
 
 type
@@ -29,7 +29,6 @@ type
     else:
       when useThreads:
         fLock: Lock
-        rotatingCond: Cond
         fd: File
       else:
         fd: File
@@ -98,13 +97,12 @@ proc newFileLogger*(
   result.impl.fileName = fileName
   result.impl.rotated = rotated
   result.impl.maxRotations = maxRotations
-  result.impl.fd = nil
   when useAsync:
     result.impl.alreadyRotating = nil
   else:
     when useThreads:
-      result.impl.rotatingCond.initCond()
       result.impl.fLock.initLock()
+  result.impl.fd = nil
   result.initLogger(level, fmtStr)
 
 
@@ -115,8 +113,9 @@ proc rollover(self: FileLogger) =
       let dfn = self.impl.fileName & "." & $(i+1)
       if fileExists(sfn):
         moveFile(sfn, dfn)
-    let dfn = self.impl.fileName & ".1"
-    moveFile(self.impl.fileName, dfn)
+    if fileExists(self.impl.fileName):
+      let dfn = self.impl.fileName & ".1"
+      moveFile(self.impl.fileName, dfn)
   else:
     # if maxRotations is 0 and enabled rolling, just remove the source file
     removeFile(self.impl.fileName)
@@ -154,58 +153,55 @@ when useAsync:
         await self.rotate()
 
 
-  method open*(self: FileLogger, name: string) =
+  method open*(self: FileLogger, name: string) {.async.} =
     if self.impl.rotated != FL_NONE:
       try:
         self.impl.lastRotated = getCreationTime(self.impl.fileName)
       except:
         self.impl.lastRotated = getTime()
-
-    proc realOpen() {.async.} =
-      await self.checkRotate()
-      if self.impl.fd.isNil:
-        self.impl.fd = openAsync(self.impl.fileName, fmAppend)
-    waitFor(realOpen())
+    await self.checkRotate()
+    if self.impl.fd.isNil:
+      self.impl.fd = openAsync(self.impl.fileName, fmAppend)
     self.install(name)
 
 
-  method log*(logger: FileLogger, level: logging.Level, args: varargs[string, `$`]) =
+  method asyncLog*(logger: FileLogger, level: logging.Level, args: varargs[string, `$`]): Future[void] =
     if level >= logger.levelThreshold:
+      proc realWrite(msg: string) {.async.} =
+        try:
+          await logger.checkRotate()
+          await logger.impl.fd.write(msg)
+        except:
+          discard
       let msg = logger.buildMessage(level, args) & "\n"
-      proc realsend() {.async.} =
-        await logger.checkRotate()
-        await write(logger.impl.fd, msg)
-      waitFor(realsend())
+      result = realWrite(msg)
+    else:
+      result = Future[void]()
+      result.complete()
+
+  method log*(logger: FileLogger, level: logging.Level, args: varargs[string, `$`]) =
+    waitFor(asyncLog(logger, level, args))
+
+  method close*(self: FileLogger) {.async.} =
+    self.impl.fd.close()
+    self.deinstall()
 
 else:
-  proc rotate(self: FileLogger) =
-    if not self.impl.fLock.tryAcquire():
-      self.impl.rotatingCond.wait(self.impl.fLock)
-    else:
+  proc checkRotate(self: FileLogger) =
+    let currTime = getTime()
+    let needRotate = case self.impl.rotated
+      of FL_NONE: false
+      of FL_HOUR: (currTime - self.impl.lastRotated).inHours >= 1
+      of FL_DAY:  (currTime - self.impl.lastRotated).inDays >= 1
+      of FL_WEEK: (currTime - self.impl.lastRotated).inWeeks >= 1
+
+    if needRotate:
       if not self.impl.fd.isNil:
         self.impl.fd.close()
       # do rotations
       self.rollover()
       self.impl.fd = open(self.impl.fileName, fmAppend)
-      self.impl.lastRotated = getTime()
-      self.impl.rotatingCond.broadcast()
-      self.impl.fLock.release()
-
-
-  proc checkRotate(self: FileLogger) =
-    let currTime = getTime()
-    case self.impl.rotated
-    of FL_NONE:
-      discard
-    of FL_HOUR:
-      if (currTime-self.impl.lastRotated).inHours >= 1:
-        self.rotate()
-    of FL_DAY:
-      if (currTime-self.impl.lastRotated).inDays >= 1:
-        self.rotate()
-    of FL_WEEK:
-      if (currTime-self.impl.lastRotated).inWeeks >= 1:
-        self.rotate()
+      self.impl.lastRotated = currTime
 
 
   method open*(self: FileLogger, name: string) =
@@ -222,14 +218,17 @@ else:
 
   method log*(logger: FileLogger, level: logging.Level, args: varargs[string, `$`]) =
     if level >= logger.levelThreshold:
-      logger.checkRotate()
-      let msg = logger.buildMessage(level, args) & "\n"
-      write(logger.impl.fd, msg)
+      whenNeedLock(logger.impl.fLock):
+        logger.checkRotate()
+        let msg = logger.buildMessage(level, args) & "\n"
+        write(logger.impl.fd, msg)
 
 
-method close*(self: FileLogger) =
-  self.impl.fd.close()
-  self.deinstall()
+  method close*(self: FileLogger) =
+    whenNeedLock(self.impl.fLock):
+      if not self.impl.fd.isNil:
+        self.impl.fd.close()
+    self.deinstall()
 
 
 proc clone*(self: FileLogger): FileLogger =

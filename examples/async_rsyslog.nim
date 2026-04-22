@@ -3,21 +3,31 @@ import std/[asyncdispatch]
 
 
 proc useRsyslog() {.async.} =
-  let logger: ServerLogger = newRsyslogLogger()
-  logger.open("AsyncRsysLogTest")
+  let logger = newRsyslogLogger()
+  await logger.open("AsyncRsysLogTest")
   logger.tag("key", "value")
   logger.tag("key1", 8)
   log(lvlDebug, "Test log")
-  logger.close()
+  await logger.close()
 
 
 proc useFileLog() {.async.}=
   var logger = newFileLogger("test.log")
-  logger.open("AsyncFileLogTest")
+  await logger.open("AsyncFileLogTest")
   logger.tag("key", "value")
   logger.tag("key1", 8)
   log(lvlDebug, "Test log")
-  logger.close()
+  await logger.close()
+
+proc useConsoleLog() {.async.}=
+  var logger = newConsoleLogger(false)
+  await logger.open("AsyncConsoleLogTest")
+  logger.tag("key", "value")
+  logger.tag("key1", 8)
+  log(lvlDebug, "Test log")
+  await logger.close()
+
 
 waitFor(useRsyslog())
 waitFor(useFileLog())
+waitFor(useConsoleLog())

@@ -23,7 +23,7 @@ type
 
 
 const YEAR_MONTH_DAY = "yyyy-MM-dd"
-const HOUR_MINUTE_SECOND = "hh:mm:ss"
+const HOUR_MINUTE_SECOND = "HH:mm:ss"
 const DATE_FORMAT = YEAR_MONTH_DAY & " " & HOUR_MINUTE_SECOND
 const DATE_FORMAT_LENGHT = DATE_FORMAT.len
 const MSECS_LEN = 3

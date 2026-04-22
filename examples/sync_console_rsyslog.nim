@@ -25,6 +25,7 @@ proc useFileLog() =
   log(lvlDebug, "Test log")
   logger.close()
 
+
 proc useRotatingFileLog() =
   var logger = newFileLogger("test.log", FL_HOUR, maxRotations=1)
   logger.open("SyncFileLogTest")
