@@ -141,75 +141,76 @@ proc buildReal(
       strlen.inc(hostName.len)
     else:
       strlen.inc
-  result.setLen(strlen)
-  var destUnchecked = cast[ptr UncheckedArray[char]](result[0].addr)
-  var at = 0
-  template add(ds: ptr UncheckedArray[char], c: char) =
-    ds[at] = c
-    at.inc
-  template add(ds: ptr UncheckedArray[char], s: openArray[char]) =
-    for c in s:
-      ds.add(c)
-  let ts = now()
-  for code in self.fmt:
-    case code
-    of LF_NAME.uint8:
-      for n in name:
-        destUnchecked.add(n)
-    of LF_LEVEL_NO.uint8:
-      destUnchecked.add(('0'.uint8+level.uint8).char)
-    of LF_LEVEL_NAME.uint8:
-      destUnchecked.add(namesTable[level])
-    of LF_FILE_NAME.uint8:
-      for n in filename:
-        destUnchecked.add(n)
-    of LF_LINE_NO.uint8:
-      destUnchecked.add(lineno)
-    of LF_ASCTIME.uint8:
-      destUnchecked.add(ts.format(DATE_FORMAT))
-    of LF_MSECS.uint8:
-      let ms = $convert(Nanoseconds, Milliseconds, ts.nanosecond)
-      var msecs = MSECS_LEN
-      if ms.len < MSECS_LEN:
-        let leading0 = MSECS_LEN-ms.len
-        for n in 0..<leading0:
-          destUnchecked.add('0')
-        msecs = ms.len
-      for n in 0..<msecs:
-        destUnchecked.add(ms[n])
-    of LF_THREAD_ID.uint8:
-      when useThreads:
-        if threadId >= 0:
-          destUnchecked.add($threadId)
+  if strlen > 0:
+    result.setLen(strlen)
+    var destUnchecked = cast[ptr UncheckedArray[char]](result[0].addr)
+    var at = 0
+    template add(ds: ptr UncheckedArray[char], c: char) =
+      ds[at] = c
+      at.inc
+    template add(ds: ptr UncheckedArray[char], s: openArray[char]) =
+      for c in s:
+        ds.add(c)
+    let ts = now()
+    for code in self.fmt:
+      case code
+      of LF_NAME.uint8:
+        for n in name:
+          destUnchecked.add(n)
+      of LF_LEVEL_NO.uint8:
+        destUnchecked.add(('0'.uint8+level.uint8).char)
+      of LF_LEVEL_NAME.uint8:
+        destUnchecked.add(namesTable[level])
+      of LF_FILE_NAME.uint8:
+        for n in filename:
+          destUnchecked.add(n)
+      of LF_LINE_NO.uint8:
+        destUnchecked.add(lineno)
+      of LF_ASCTIME.uint8:
+        destUnchecked.add(ts.format(DATE_FORMAT))
+      of LF_MSECS.uint8:
+        let ms = $convert(Nanoseconds, Milliseconds, ts.nanosecond)
+        var msecs = MSECS_LEN
+        if ms.len < MSECS_LEN:
+          let leading0 = MSECS_LEN-ms.len
+          for n in 0..<leading0:
+            destUnchecked.add('0')
+          msecs = ms.len
+        for n in 0..<msecs:
+          destUnchecked.add(ms[n])
+      of LF_THREAD_ID.uint8:
+        when useThreads:
+          if threadId >= 0:
+            destUnchecked.add($threadId)
+          else:
+            destUnchecked.add('-')
+            destUnchecked.add('1')
+      of LF_PROCESS_ID.uint8:
+        if processId >= 0:
+          destUnchecked.add($processId)
         else:
           destUnchecked.add('-')
           destUnchecked.add('1')
-    of LF_PROCESS_ID.uint8:
-      if processId >= 0:
-        destUnchecked.add($processId)
+      of LF_PROCESS_NAME.uint8:
+        destUnchecked.add(processName)
+      of LF_TAGS.uint8:
+        destUnchecked.add('{')
+        if tagger.tags.len > 0:
+          var notFirst = false
+          for k,v in tagger.tags.pairs:
+            if notFirst:
+              destUnchecked.add(',')
+            destUnchecked.add(k)
+            destUnchecked.add(':')
+            destUnchecked.add(v)
+            notFirst = true
+        destUnchecked.add('}')
+      of LF_MESSAGE.uint8:
+        destUnchecked.add(message)
+      of LF_HOSTNAME.uint8:
+        destUnchecked.add(hostName)
       else:
-        destUnchecked.add('-')
-        destUnchecked.add('1')
-    of LF_PROCESS_NAME.uint8:
-      destUnchecked.add(processName)
-    of LF_TAGS.uint8:
-      destUnchecked.add('{')
-      if tagger.tags.len > 0:
-        var notFirst = false
-        for k,v in tagger.tags.pairs:
-          if notFirst:
-            destUnchecked.add(',')
-          destUnchecked.add(k)
-          destUnchecked.add(':')
-          destUnchecked.add(v)
-          notFirst = true
-      destUnchecked.add('}')
-    of LF_MESSAGE.uint8:
-      destUnchecked.add(message)
-    of LF_HOSTNAME.uint8:
-      destUnchecked.add(hostName)
-    else:
-      destUnchecked.add(code.char)
+        destUnchecked.add(code.char)
 
 
 
