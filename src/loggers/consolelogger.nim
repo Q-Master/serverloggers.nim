@@ -70,12 +70,9 @@ else:
       except IOError:
         discard
 
-
-
+#[
 proc clone*(self: ConsoleLogger): ConsoleLogger =
   result.new
   self.clone(result)
   result.impl = self.impl
-
-
-
+]#

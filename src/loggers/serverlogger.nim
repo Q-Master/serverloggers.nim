@@ -10,8 +10,8 @@ type
       name: string
       hostName: string
       when useThreads:
-        threadId: int = -1
-      processId: int = -1
+        threadId: int32 = -1
+      processId: int32 = -1
       processName: string = ""
 
 
@@ -37,7 +37,7 @@ proc initLogger*(self: ServerLogger, levelThreshold: logging.Level, fmtStr: stri
   self.levelThreshold = levelThreshold
   self.formatter = newFormatter(fmtStr)
   self.hostName = getHostname()
-  self.processId = getCurrentProcessId()
+  self.processId = getCurrentProcessId().int32
   self.processName = getProcessNameByPid(self.processId)
   self.tagger.new
 
@@ -62,6 +62,7 @@ else:
   method close*(self: ServerLogger) {.base.} = discard
 
 
+#[
 proc clone*(src, dest: ServerLogger) =
   dest.levelThreshold = src.levelThreshold
   dest.formatter = src.formatter
@@ -72,17 +73,18 @@ proc clone*(src, dest: ServerLogger) =
   dest.name = src.name
   dest.hostName = src.hostName
   dest.tagger = src.tagger.clone
+]#
 
 
 proc buildMessage*(self: ServerLogger, level: logging.Level, args: varargs[string, `$`]): string =
   if args.len == 3:
     when useThreads:
-      result = self.formatter.build(self.tagger, level, self.name, self.hostName, args[0], args[1], self.processId, self.processName, getThreadId(), args[2])
+      result = self.formatter.build(self.tagger, level, self.name, self.hostName, args[0], args[1], self.processId, self.processName, getThreadId().int32, args[2])
     else:
       result = self.formatter.build(self.tagger, level, self.name, self.hostName, args[0], args[1], self.processId, self.processName, args[2])
   else:
     when useThreads:
-      result = self.formatter.build(self.tagger, level, self.name, self.hostName, "", "", self.processId, self.processName, getThreadId(), args.join(" "))
+      result = self.formatter.build(self.tagger, level, self.name, self.hostName, "", "", self.processId, self.processName, getThreadId().int32, args.join(" "))
     else:
       result = self.formatter.build(self.tagger, level, self.name, self.hostName, "", "", self.processId, self.processName, args.join(" "))
 

@@ -251,9 +251,9 @@ else:
         discard
 
 
+#[
 proc clone*(self: RsyslogLogger): RsyslogLogger =
   result.new
   self.clone(result)
   result.impl = self.impl
-
-
+]#

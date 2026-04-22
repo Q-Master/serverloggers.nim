@@ -18,4 +18,5 @@ proc len*(self: LoggerTagger): int =
 
 
 proc clone*(self: LoggerTagger): LoggerTagger =
+  result.new
   result.tags = self.tags

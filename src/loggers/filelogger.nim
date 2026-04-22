@@ -37,7 +37,7 @@ type
     impl: FileLoggerImpl
 
 
-when defined(posix):
+when defined(linux):
   import std/[posix, oserrors]
 
   type
@@ -83,7 +83,9 @@ when defined(posix):
     var res: StatX = default(StatX)
     if statx(AT_FDCWD, file, AT_SYMLINK_NOFOLLOW, STATX_BASIC_STATS or STATX_BTIME, res) < 0'i32: raiseOSError(osLastError(), file)
     result = res.stx_btime.toTime
-
+else:
+  proc getCreationTime*(file: string): times.Time =
+    result = getLastModificationTime(file)
 
 proc newFileLogger*(
   fileName: string,
@@ -231,7 +233,9 @@ else:
     self.deinstall()
 
 
+#[
 proc clone*(self: FileLogger): FileLogger =
   result.new
   self.clone(result)
   result.impl = self.impl
+]#

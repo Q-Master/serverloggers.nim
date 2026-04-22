@@ -34,7 +34,13 @@ let namesTable: array[logging.Level, char] = [
 ]
 
 
-func len(n: int): int {.inline.} =
+func len(n: int32): int {.inline.} =
+  if n > 999999999:
+    result = 10
+  if n > 99999999:
+    result = 9
+  if n > 9999999:
+    result = 8
   if n > 999999:
     result = 7
   elif n > 99999:
@@ -97,9 +103,9 @@ proc buildReal(
   self: LoggerFormatter, tagger: LoggerTagger,
   level: Level,
   name, hostName, filename, lineno: openArray[char],
-  processId: int,
+  processId: int32,
   processName: openArray[char],
-  threadId: int,
+  threadId: int32,
   message: openArray[char]): string =
   var strlen = 0
   for code in self.fmt:
@@ -219,9 +225,9 @@ when useThreads:
     self: LoggerFormatter, tagger: LoggerTagger,
     level: Level,
     name, hostName, filename, lineno: openArray[char],
-    processId: int,
+    processId: int32,
     processName: openArray[char],
-    threadId: int,
+    threadId: int32,
     message: openArray[char]
   ): string = buildReal(self, tagger, level, name, hostName, filename, lineno, processId, processName, threadId, message)
 else:
@@ -229,7 +235,7 @@ else:
     self: LoggerFormatter, tagger: LoggerTagger,
     level: Level,
     name, hostName, filename, lineno: openArray[char],
-    processId: int,
+    processId: int32,
     processName: openArray[char],
     message: openArray[char]
   ): string = buildReal(self, tagger, level, name, hostName, filename, lineno, processId, processName, 0, message)
